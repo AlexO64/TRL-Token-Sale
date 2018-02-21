@@ -43,9 +43,10 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     }
 
     // Some constant about our expected token distribution
-    uint private constant TRLCOIN_DECIMALS = 0;
-    uint private constant TOTAL_TOKENS_TO_DISTRIBUTE = 800000000 * (10 ** TRLCOIN_DECIMALS); // 750000 VRCoins
-    
+    uint public constant TRLCOIN_DECIMALS = 0;
+    uint public constant TOTAL_TOKENS_TO_DISTRIBUTE = 800000000 * (10 ** TRLCOIN_DECIMALS); // 800000000  TRL Token for distribution
+    uint public constant TOTAL_TOKENS_AVAILABLE = 1000000000 * (10 ** TRLCOIN_DECIMALS);    // 1000000000 TRL Token totals
+
     address private owner;  // The owner of the crowdsale
     bool private hasStarted; // Has the crowdsale started?
     Period private preSale; // The configured periods for this crowdsale
@@ -133,76 +134,56 @@ contract TRLCoinSale is ApproveAndCallFallBack {
        
     }
 
-    // change default presale values 
-    function setPresale( uint startDate, uint stopDate, uint price, uint tokensAvailable) public {
+    // change default presale dates 
+    function setPresaleDates(uint startDate, uint stopDate) public {
         // Only the owner can do this
-        require(msg.sender == owner);       
-
+        require(msg.sender == owner); 
         // Cannot change if already started
         require(hasStarted == false);
+        //insanity check start < stop and stop resale < start of sale
+        require(startDate < stopDate && stopDate < sale.start);
+        
         preSale.start = startDate;
         preSale.end = stopDate;
-        preSale.priceInWei = price;
-        preSale.tokens = tokensAvailable;
     }
 
-    // change default sale values 
-    function setSale( uint startDate, uint stopDate, uint price, uint tokensAvailable) public {
+    // change default sale dates 
+    function setSale(uint startDate, uint stopDate) public {
         // Only the owner can do this
-        require(msg.sender == owner);       
-
+        require(msg.sender == owner); 
         // Cannot change if already started
         require(hasStarted == false);
+        // insanity check start < stop and stop resale < start of sale
+        require(startDate < stopDate && startDate > preSale.end);
+        // insanity check sale.end < distirbution token time
+        require(sale.end < distributionTime);
+        
         sale.start = startDate;
         sale.end = stopDate;
-        sale.priceInWei = price;
-        sale.tokens = tokensAvailable;
     }
 
-    // Start the crowdsale
-    function startSale() public {
+    // change default distibution time
+    function setDistributionTime(uint timeOfDistribution) public {
         // Only the owner can do this
-        require(msg.sender == owner);       
-
-        // Cannot start if already started
+        require(msg.sender == owner); 
+        // Cannot change if already started
         require(hasStarted == false);
-
-        // Do not trasnsfer ammount by old way - use approveAndCall on TRL contract
-        // Attempt to transfer all tokens to the crowdsale contract
-        // The owner needs to approve() the transfer of all tokens to this contract
+        // insanity check sale.end < distirbution token time
+        require(sale.end < timeOfDistribution);
         
-        /*
-        Printf("Try to transfer original amount of token.");
-        if (!tokenWallet.transferFrom(owner, this, TOTAL_TOKENS_TO_DISTRIBUTE)) {
-            // Something has gone wrong, the owner no longer controls all the tokens?
-            // We cannot proceed
-            Error( "Cannot transfer initial tokens to sale contract");
-            revert();
-        }
-        Transfer(this, TOTAL_TOKENS_TO_DISTRIBUTE);
-        */
-
-        // Sanity check: verify the crowdsale controls all tokens        
-        require(tokenWallet.balanceOf(this) >= TOTAL_TOKENS_TO_DISTRIBUTE);
-
-        tokensRemaining = tokenWallet.balanceOf(this);
-
-        // The sale can begin
-        hasStarted = true;
-
-        // Fire event that the sale has begun
-        Start(block.timestamp);
+        distributionTime = timeOfDistribution;
     }
 
-    //this function added Contributor that already made contribution before presale started
+    // this function added Contributor that already made contribution before presale started 
+    // should be called only after token was transfered to Sale contract
     function addContributorManually( address who, uint contributionWei, uint tokenAwarded) public {
         // only owner
-        require(msg.sender == owner);       
-
-        //contract must be alive
-        require(hasStarted == true);
+        require(msg.sender == owner);   
+        //contract must be not active
+        require(hasStarted == false);
         // all entried must be added before presale started
         require(block.timestamp < preSale.start);
+        //
 
         PaymentContribution memory contributor;
         contributor.addressOfContributor = who;
@@ -210,9 +191,39 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         contributor.weiContributed = contributionWei;
         contributor.receiveTokens = tokenAwarded;
 
+        // decrement existing values
+        tokensRemaining -= tokenAwarded;
+        preSale.tokens -= tokenAwarded;
+
         payments.push(contributor);
     }
 
+
+    // Start the crowdsale
+    function startSale() public {
+        // Only the owner can do this
+        require(msg.sender == owner); 
+        // Cannot start if already started
+        require(hasStarted == false);
+        // Make sure the timestamps all make sense
+        require(preSale.end > preSale.start);
+        require(sale.end > sale.start);
+        require(sale.start > preSale.end);
+        require(distributionTime > sale.end);
+
+        // Make sure we allocated all sale tokens
+        require((preSale.tokens + sale.tokens) == tokensRemaining);          
+
+        // Sanity check: verify the crowdsale controls all tokens        
+        require(tokenWallet.balanceOf(this) >= TOTAL_TOKENS_TO_DISTRIBUTE);
+        // The sale can begin
+        hasStarted = true;
+
+        // Fire event that the sale has begun
+        Start(block.timestamp);
+    }
+
+    
 
     // Allow the current owner to change the owner of the crowdsale
     function changeOwner(address newOwner) public {
@@ -242,7 +253,8 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // checking what perios are we
         if (timeOfRequest <= preSale.end) {
             // Return the amount of tokens that can be purchased
-            // And the amount of wei that would be left overtokenAmount = weiContribution / preSale.priceInWei;
+            // And the amount of wei that would be left over
+            tokenAmount = weiContribution / preSale.priceInWei;
             weiRemainder = weiContribution % preSale.priceInWei;
             // if presale - checking bonuses
             if (weiContribution >= largeBonus.amount) {
@@ -276,7 +288,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         (timeOfRequest, tokenAmount, weiRemainder, bonus) = getTokensForContribution(msg.value);
 
         // Need to contribute enough for at least 1 token
-        require(tokensRemaining >= tokenAmount);
+        require(tokensRemaining >= tokenAmount + bonus);
         
         // Need to contribute enough for at least 1 token
         require(tokenAmount > 0);
@@ -288,11 +300,11 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         if (timeOfRequest <= preSale.end) {
             require(tokenAmount <= preSale.tokens);
             require(bonus <= sale.tokens);
-            preSale.tokens = preSale.tokens - tokenAmount;
-            sale.tokens = sale.tokens - bonus;
+            preSale.tokens -= tokenAmount;
+            sale.tokens -= bonus;
         } else {
             require(tokenAmount <= sale.tokens);
-            sale.tokens = sale.tokens - tokenAmount;
+            sale.tokens -= tokenAmount;
         }
         tokensRemaining = tokensRemaining - tokenAmount - bonus;
         
@@ -323,17 +335,13 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     function withdrawTokensRemaining() public returns (bool) {
         // Only the owner can do this
         require(msg.sender == owner);
-
-        // Get the ending timestamp of the crowdsale
-        uint crowdsaleEnd = sale.end;
-
         // The crowsale must be over to perform this operation
-        require(block.timestamp > crowdsaleEnd);
-
+        require(block.timestamp > sale.end);
         // Get the remaining tokens owned by the crowdsale
-        
+        uint tokens = tokensRemaining;
+        tokensRemaining = 0;
         // Transfer them all to the owner
-        tokenWallet.transfer(owner, tokensRemaining);
+        tokenWallet.transfer(owner, tokens);
         return true;
     }
 
@@ -342,16 +350,11 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     function withdrawEtherRemaining() public returns (bool) {
         // Only the owner can do this
         require(msg.sender == owner);
-
-        // Get the ending timestamp of the crowdsale
-        uint crowdsaleEnd = preSale.end;
-
         // The crowsale must be over to perform this operation
-        require(block.timestamp > crowdsaleEnd);
+        require(block.timestamp > sale.end);
 
         // Transfer them all to the owner
         owner.transfer(this.balance);
-
         return true;
     }
 
@@ -389,4 +392,30 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         return true;        
     }
 
+    /* something to think about 
+    struct PaymentContribution {
+        uint weiContributed;
+        uint timeContribution;
+        uint receiveTokens;
+    }
+
+    struct TotalContribution {
+        uint totalReceiveTokens;
+        // Only necessary if users want to be able to see contribution history. 
+        // Otherwise, technically not necessary for the purposes of the sale
+        PaymentContribution[] paymentHistory; 
+    }
+
+    mapping(address => TotalContribution) payments;
+
+    function claimTokens() public {
+        require(block.timstamp >= distributionTime);
+        uint tokenToSend = payments[msg.sender].totalReceiveTokens;
+        if(tokensToSend > 0) {
+            payments[msg.sender].totalReceiveTokens = 0;
+            tokenWallet.transfer(msg.sender, tokenToSend);
+            Distribute(msg.sender, tokenToSend);
+        }
+    }
+    */
 }
