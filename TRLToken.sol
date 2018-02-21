@@ -182,6 +182,7 @@ contract TRLToken is ERC20Interface, Owned {
     }
 
     function approveAndCall (address spender, uint tokens) public returns (bool success) {
+        require(balances[msg.sender] >= tokens);
         allowed[msg.sender][spender] = tokens;
         Approval(msg.sender, spender, tokens);
         ApproveAndCallFallBack(spender).receiveApproval(msg.sender, tokens, this);
