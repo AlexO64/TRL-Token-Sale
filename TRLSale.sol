@@ -36,10 +36,19 @@ contract TRLCoinSale is ApproveAndCallFallBack {
 
     // Information about payment contribution
     struct PaymentContribution {
-        address addressOfContributor;
         uint weiContributed;
         uint timeContribution;
         uint receiveTokens;
+    }
+
+    struct TotalContribution {
+        // total value of contribution
+        uint totalReceiveTokens;
+        // for empty address in mapping the value is 0 - otherwise we set it up 1
+        uint8 active;
+        // Only necessary if users want to be able to see contribution history. 
+        // Otherwise, technically not necessary for the purposes of the sale
+        PaymentContribution[] paymentHistory; 
     }
 
     // Some constant about our expected token distribution
@@ -56,10 +65,14 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     Bonus private smallBonus; //The small bonus for presale
     Bonus private largeBonus; //The large bonus for presale
 
-    uint private tokensRemaining; //Remaining total amout of tokens  
+    uint private tokensRemainingForSale; //Remaining total amout of tokens  
+    uint private tokensAwardedForSale;   // total awarded tokens
 
-    PaymentContribution[] private payments; // The configured periods for this crowdsale  
+    // pair fo variables one for mapping one for iteration
+    mapping(address => TotalContribution) public payments; // The configured periods for this crowdsale  
+    address[] public paymentAddresses;
 
+    // ERC20 Contract address.
     ERC20Interface private tokenWallet; // The token wallet contract used for this crowdsale
     
     // Fired once the transfer tokens to contract was successfull
@@ -74,6 +87,31 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     // Fires whenever we send token to contributor
     event Distribute( address indexed to, uint tokensSend );
 
+    function addContribution(address from, uint weiContributed, uint tokensReceived) private returns(bool) {
+        //new contibutor
+        require(weiContributed > 0);
+        require(tokensReceived > 0);
+        
+        PaymentContribution memory newContribution;
+        newContribution.timeContribution = block.timestamp;
+        newContribution.weiContributed = weiContributed;
+        newContribution.receiveTokens = tokensReceived;
+
+        if (payments[from].active == 0) {
+            // new total contribution           
+            payments[from].totalReceiveTokens = tokensReceived;
+            payments[from].active = 1;
+            payments[from].paymentHistory.push(newContribution);
+            
+             // push new address to array for iteration by address  during distirbution process
+            paymentAddresses.push(from);
+        } else {
+            payments[from].totalReceiveTokens += tokensReceived;
+            payments[from].paymentHistory.push(newContribution);
+        }
+        return true;
+    }
+
     // public getters for private state variables
     function getOwner() public view returns (address) { return owner; }
     function getHasStartedState() public view  returns(bool) { return hasStarted; }
@@ -87,14 +125,12 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     
     function getSmallBonus() public view returns(uint, uint8) { return (smallBonus.amount, smallBonus.bonus ); }
     function getLargeBonus() public view returns(uint, uint8) { return (largeBonus.amount, largeBonus.bonus ); }
-    function getTokenRemaining() public view returns(uint) { return tokensRemaining; }
-
-    function getPaymentContributorByIndex(uint idx) public view returns(address, uint, uint, uint) {
-        require(idx<payments.length);
-        return (payments[idx].addressOfContributor, payments[idx].weiContributed, payments[idx].timeContribution, payments[idx].receiveTokens);  
-    } 
+    function getTokenRemaining() public view returns(uint) { return tokensRemainingForSale; }
+    function getTokenAwarded() public view returns(uint) { return tokensAwardedForSale; }
 
     function receiveApproval(address from, uint256 tokens, address token) external {
+        require(hasStarted == false);
+        tokensRemainingForSale += tokens;
         ERC20Interface(token).transferFrom(from, this, tokens);
     }
 
@@ -104,7 +140,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         tokenWallet = ERC20Interface(walletAddress);
 
         // Make sure the provided token has the expected number of tokens to distribute
-        require(tokenWallet.totalSupply() >= TOTAL_TOKENS_TO_DISTRIBUTE);
+        require(tokenWallet.totalSupply() == TOTAL_TOKENS_AVAILABLE);
 
         // Make sure the owner actually controls all the tokens
         require(tokenWallet.balanceOf(owner) >= TOTAL_TOKENS_TO_DISTRIBUTE);
@@ -130,8 +166,8 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         
         distributionTime = 1539302400;
 
-        tokensRemaining = TOTAL_TOKENS_TO_DISTRIBUTE;
-       
+        tokensRemainingForSale = 0;
+        tokensAwardedForSale = 0;
     }
 
     // change default presale dates 
@@ -176,28 +212,24 @@ contract TRLCoinSale is ApproveAndCallFallBack {
 
     // this function added Contributor that already made contribution before presale started 
     // should be called only after token was transfered to Sale contract
-    function addContributorManually( address who, uint contributionWei, uint tokenAwarded) public {
+    function addContributorManually( address who, uint contributionWei, uint tokens) public {
         // only owner
         require(msg.sender == owner);   
         //contract must be not active
         require(hasStarted == false);
         // all entried must be added before presale started
         require(block.timestamp < preSale.start);
-        //
+        // contract mush have total == TOTAL_TOKENS_TO_DISTRIBUTE
+        require((tokensRemainingForSale + tokensAwardedForSale) == TOTAL_TOKENS_TO_DISTRIBUTE);
 
-        PaymentContribution memory contributor;
-        contributor.addressOfContributor = who;
-        contributor.timeContribution = block.timestamp;
-        contributor.weiContributed = contributionWei;
-        contributor.receiveTokens = tokenAwarded;
+        addContribution(who, contributionWei, tokens);
 
         // decrement existing values
-        tokensRemaining -= tokenAwarded;
-        preSale.tokens -= tokenAwarded;
-
-        payments.push(contributor);
+        // pair tokensRemainingForSale + tokensAwardedForSale always must be TOTAL_TOKENS_TO_DISTRIBUTE
+        tokensRemainingForSale -= tokens;
+        tokensAwardedForSale += tokens;
+        preSale.tokens -= tokens;
     }
-
 
     // Start the crowdsale
     function startSale() public {
@@ -211,19 +243,19 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         require(sale.start > preSale.end);
         require(distributionTime > sale.end);
 
-        // Make sure we allocated all sale tokens
-        require((preSale.tokens + sale.tokens) == tokensRemaining);          
+        // Make sure the owner actually controls all the tokens for sales
+        require(tokenWallet.balanceOf(owner) == TOTAL_TOKENS_TO_DISTRIBUTE);
+        require((tokensRemainingForSale + tokensAwardedForSale) == TOTAL_TOKENS_TO_DISTRIBUTE);
 
-        // Sanity check: verify the crowdsale controls all tokens        
-        require(tokenWallet.balanceOf(this) >= TOTAL_TOKENS_TO_DISTRIBUTE);
+        // Make sure we allocated all sale tokens
+        require((preSale.tokens + sale.tokens) == tokensRemainingForSale);          
+
         // The sale can begin
         hasStarted = true;
 
         // Fire event that the sale has begun
         Start(block.timestamp);
-    }
-
-    
+    }    
 
     // Allow the current owner to change the owner of the crowdsale
     function changeOwner(address newOwner) public {
@@ -288,7 +320,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         (timeOfRequest, tokenAmount, weiRemainder, bonus) = getTokensForContribution(msg.value);
 
         // Need to contribute enough for at least 1 token
-        require(tokensRemaining >= tokenAmount + bonus);
+        require(tokensRemainingForSale >= tokenAmount + bonus);
         
         // Need to contribute enough for at least 1 token
         require(tokenAmount > 0);
@@ -306,14 +338,14 @@ contract TRLCoinSale is ApproveAndCallFallBack {
             require(tokenAmount <= sale.tokens);
             sale.tokens -= tokenAmount;
         }
-        tokensRemaining = tokensRemaining - tokenAmount - bonus;
+
+        // this pair always must be in sync
+        tokensRemainingForSale = tokensRemainingForSale - tokenAmount - bonus;
+        tokensAwardedForSale = tokensAwardedForSale + tokenAmount + bonus;
+        
         
         // setup new contribution
-        PaymentContribution memory contributor;
-        contributor.addressOfContributor = msg.sender;
-        contributor.timeContribution = timeOfRequest;
-        contributor.weiContributed = msg.value - weiRemainder;
-        contributor.receiveTokens = tokenAmount + bonus;
+        addContribution(msg.sender, msg.value - weiRemainder, tokenAmount + bonus);
 
         // Transfer the token amount from the crowd sale's token wallet to the
         // sender's token wallet
@@ -323,10 +355,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
 
         // Since we refunded the remainder, the actual contribution is the amount sent
         // minus the remainder
-        payments.push(contributor);
-
+        
         // Record the event
-        Contribution(msg.sender, contributor.weiContributed, contributor.receiveTokens);
+        Contribution(msg.sender, msg.value - weiRemainder, tokenAmount + bonus);
     } 
 
     
@@ -338,15 +369,15 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // The crowsale must be over to perform this operation
         require(block.timestamp > sale.end);
         // Get the remaining tokens owned by the crowdsale
-        uint tokens = tokensRemaining;
-        tokensRemaining = 0;
+        uint tokens = tokensRemainingForSale;
+        tokensRemainingForSale = 0;
         // Transfer them all to the owner
         tokenWallet.transfer(owner, tokens);
         return true;
     }
 
     // Allow the owner to withdraw all ether from the contract after the
-    // crowdsale is over
+    // crowdsale is over - we don't need this function - just in case
     function withdrawEtherRemaining() public returns (bool) {
         // Only the owner can do this
         require(msg.sender == owner);
@@ -360,13 +391,13 @@ contract TRLCoinSale is ApproveAndCallFallBack {
 
     function transferTokensToContributor(uint idx) public returns (bool) {
         // number of available token should be > 0
-        if (payments[idx].receiveTokens > 0) {
+        if (payments[paymentAddresses[idx]].totalReceiveTokens > 0) {
             // this is for race conditions               
-            uint tokenToSend = payments[idx].receiveTokens;
-            payments[idx].receiveTokens = 0;
+            uint tokenToSend = payments[paymentAddresses[idx]].totalReceiveTokens;
+            payments[paymentAddresses[idx]].totalReceiveTokens = 0;
             // Transfer them all to the owner
-            tokenWallet.transfer(payments[idx].addressOfContributor, tokenToSend);
-            Distribute(payments[idx].addressOfContributor, tokenToSend);
+            tokenWallet.transfer(paymentAddresses[idx], tokenToSend);
+            Distribute(paymentAddresses[idx], tokenToSend);
         }
         return true;
 
@@ -375,9 +406,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     function ditributeTokensToContributor( uint startIndex, uint numberOfContributors )public returns (bool) {
         // this is regular check for this function
         require(msg.sender == owner);
-        require(startIndex < payments.length);
-        uint len = payments.length < startIndex + numberOfContributors? payments.length : startIndex + numberOfContributors;
-        for (uint i = startIndex; i < len; ++i) {
+        require(startIndex < paymentAddresses.length);
+        uint len = paymentAddresses.length < startIndex + numberOfContributors? paymentAddresses.length : startIndex + numberOfContributors;
+        for (uint i = startIndex; i < len; i++) {
             transferTokensToContributor(i);                    
         }
         return true;        
@@ -386,36 +417,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     function ditributeAllTokensToContributor( )public returns (bool) {
         // this is regular check for this function
         require(msg.sender == owner);
-        for (uint i = 0; i < payments.length; ++i) {
+        for (uint i = 0; i < paymentAddresses.length; i++) {
             transferTokensToContributor(i); 
         }
         return true;        
     }
-
-    /* something to think about 
-    struct PaymentContribution {
-        uint weiContributed;
-        uint timeContribution;
-        uint receiveTokens;
-    }
-
-    struct TotalContribution {
-        uint totalReceiveTokens;
-        // Only necessary if users want to be able to see contribution history. 
-        // Otherwise, technically not necessary for the purposes of the sale
-        PaymentContribution[] paymentHistory; 
-    }
-
-    mapping(address => TotalContribution) payments;
-
-    function claimTokens() public {
-        require(block.timstamp >= distributionTime);
-        uint tokenToSend = payments[msg.sender].totalReceiveTokens;
-        if(tokensToSend > 0) {
-            payments[msg.sender].totalReceiveTokens = 0;
-            tokenWallet.transfer(msg.sender, tokenToSend);
-            Distribute(msg.sender, tokenToSend);
-        }
-    }
-    */
 }
