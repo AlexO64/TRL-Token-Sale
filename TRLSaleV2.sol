@@ -25,8 +25,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         uint start;
         uint end;
         uint priceInWei;
-        uint bonus;
-        uint tokensAvailable;
+        uint tokens;
     }
 
     // Information about payment contribution
@@ -53,22 +52,26 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     // ERC20 Contract address.
     ERC20Interface private tokenWallet; // The token wallet contract used for this crowdsale
     
+    address private owner;  // The owner of the crowdsale
+    
+    uint private smallBonus; //The small bonus for presale
+    uint private largeBonus; //The large bonus for presale
+    uint private largeBonusStopTime; //The stop time for Large bonus
+
     uint private tokensRemainingForSale; //Remaining total amout of tokens  
     uint private tokensAwardedForSale;   // total awarded tokens
-    
-    address private owner;      // The owner of the crowdsale
-    
+
     uint private distributionTime; // time after we could start distribution tokens
     
-    Period private preSale20;   // The configured periods for this crowdsale
-    Period private preSale10;   // The configured periods for this crowdsale
-    Period private sale;        // The configured periods for this crowdsale
+    Period private preSale; // The configured periods for this crowdsale
+    Period private sale;    // The configured periods for this crowdsale
+    
     
     // pair fo variables one for mapping one for iteration
     mapping(address => TotalContribution) public payments; // Track contributions by each address 
     address[] public paymentAddresses;
 
-    bool private hasStarted;    // Has the crowdsale started?
+    bool private hasStarted; // Has the crowdsale started?
     
     // Fired once the transfer tokens to contract was successfull
     event Transfer(address indexed to, uint amount);
@@ -114,17 +117,17 @@ contract TRLCoinSale is ApproveAndCallFallBack {
     // public getters for private state variables
     function getOwner() public view returns (address) { return owner; }
     function getHasStartedState() public view  returns(bool) { return hasStarted; }
-    function getPresale20() public view returns(uint, uint, uint, uint, uint) { 
-        return (preSale20.start, preSale20.end, preSale20.priceInWei, preSale20.bonus, preSale10.tokensAvailable);
+    function getPresale() public view returns(uint, uint, uint, uint) { 
+        return (preSale.start, preSale.end, preSale.priceInWei, preSale.tokens);
     }
-    function getPresale10() public view returns(uint, uint, uint, uint, uint) { 
-        return (preSale10.start, preSale10.end, preSale10.priceInWei, preSale10.bonus, preSale10.tokensAvailable);
-    }
-    function getSale() public view returns(uint, uint, uint, uint, uint) { 
-        return (sale.start, sale.end, sale.priceInWei, sale.bonus, sale.tokensAvailable);
+    function getSale() public view returns(uint, uint, uint, uint) { 
+        return (sale.start, sale.end, sale.priceInWei, sale.tokens);
     }
     function getDistributionTime() public view returns(uint) { return distributionTime; }
     
+    function getSmallBonus() public view returns(uint) { return smallBonus; }
+    function getLargeBonus() public view returns(uint) { return largeBonus; }
+    function getLargeBonusStopTime() public view returns(uint) { return  largeBonusStopTime; }
     function getTokenRemaining() public view returns(uint) { return tokensRemainingForSale; }
     function getTokenAwarded() public view returns(uint) { return tokensAwardedForSale; }
 
@@ -162,56 +165,51 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // The multiplier necessary to change a coin amount to the token amount
         uint coinToTokenFactor = 10 ** TRLCOIN_DECIMALS;
 
-        preSale20.start = 1523491200; // 00:00:00, April 12, 2018 UTC use next site https://www.epochconverter.com/
-        preSale20.end = 1531353599; // 23:59:59, July 11, 2018 UTC
-        preSale20.priceInWei = (1 ether) / (20000 * coinToTokenFactor); // 1 ETH = 20000 TRL
-        preSale20.bonus = 20; // bonus = 20%
-        preSale20.tokensAvailable = TOTAL_TOKENS_TO_DISTRIBUTE / 2;
+        preSale.start = 1520812800; // 00:00:00, March 12, 2018 UTC use next site https://www.epochconverter.com/
+        preSale.end = 1523491199; // 23:59:59, July 11, 2018 UTC
+        preSale.priceInWei = (1 ether) / (20000 * coinToTokenFactor); // 1 ETH = 20000 TRL
+        preSale.tokens = TOTAL_TOKENS_TO_DISTRIBUTE / 2;
        
-        preSale10.start = 1523491200; // 00:00:00, April 12, 2018 UTC use next site https://www.epochconverter.com/
-        preSale10.end = 1531353599; // 23:59:59, July 11, 2018 UTC
-        preSale10.priceInWei = (1 ether) / (20000 * coinToTokenFactor); // 1 ETH = 20000 TRL
-        preSale10.bonus = 10; // bonus = 10%
-        preSale10.tokensAvailable = 0;
-        
-        sale.start = 1531353600; // 00:00:00, July 12, 2018 UTC use next site https://www.epochconverter.com/
-        sale.end = 1539302399; // 23:59:59, October 11, 2018 UTC
+        smallBonus = 10;
+        largeBonus = 20;
+        largeBonusStopTime = 1521504000;
+    
+        sale.start = 1523491200; // 00:00:00, July 12, 2018 UTC use next site https://www.epochconverter.com/
+        sale.end = 1531378799; // 23:59:59, July 11, 2018 UTC
         sale.priceInWei = (1 ether) / (10000 * coinToTokenFactor); // 1 ETH = 10000 TRL
-        sale.bonus = 0; // bonus = 0%
-        sale.tokensAvailable = TOTAL_TOKENS_TO_DISTRIBUTE / 2;
+        sale.tokens = TOTAL_TOKENS_TO_DISTRIBUTE / 2;
         
-        distributionTime = 1539302400; // 00:00:00, October 12, 2018 UTC
+        distributionTime = 1531378800; // 00:00:00, June 12, 2018 UTC
 
         tokensRemainingForSale = 0;
         tokensAwardedForSale = 0;
     }
 
     // change default presale dates 
-    function setPresale20Dates(uint startDate, uint stopDate) public {
+    function setPresaleDates(uint startDate, uint stopDate) public {
         // Only the owner can do this
         require(msg.sender == owner); 
         // Cannot change if already started
         require(hasStarted == false);
         //insanity check start < stop and stop resale < start of sale
-        require(startDate < stopDate && stopDate < preSale10.start);
+        require(startDate < stopDate && stopDate < sale.start);
         
-        preSale20.start = startDate;
-        preSale20.end = stopDate;
+        preSale.start = startDate;
+        preSale.end = stopDate;
     }
-
+    
     // change default presale dates 
-    function setPresale10Dates(uint startDate, uint stopDate) public {
+    function setlargeBonusStopTime(uint bonusStopTime) public {
         // Only the owner can do this
         require(msg.sender == owner); 
         // Cannot change if already started
         require(hasStarted == false);
         //insanity check start < stop and stop resale < start of sale
-        require(startDate < stopDate && preSale20.end < startDate && stopDate < sale.start );
+        require(preSale.start <= bonusStopTime && bonusStopTime <= preSale.end);
         
-        preSale10.start = startDate;
-        preSale10.end = stopDate;
+        largeBonusStopTime = bonusStopTime;
     }
-
+    
     // change default sale dates 
     function setSale(uint startDate, uint stopDate) public {
         // Only the owner can do this
@@ -219,9 +217,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // Cannot change if already started
         require(hasStarted == false);
         // insanity check start < stop and stop resale < start of sale
-        require(startDate < stopDate && startDate > preSale10.end);
+        require(startDate < stopDate && startDate > preSale.end);
         // insanity check sale.end < distirbution token time
-        require(stopDate < distributionTime);
+        require(sale.end < distributionTime);
         
         sale.start = startDate;
         sale.end = stopDate;
@@ -247,14 +245,12 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         //contract must be not active
         require(hasStarted == false);
         // all entried must be added before presale started
-        require(block.timestamp < preSale20.start);
+        require(block.timestamp < preSale.start);
         // contract mush have total == TOTAL_TOKENS_TO_DISTRIBUTE
         require((tokensRemainingForSale + tokensAwardedForSale) == TOTAL_TOKENS_TO_DISTRIBUTE);
-        // contract mush have total == TOTAL_TOKENS_TO_DISTRIBUTE
-        require(preSale20.tokensAvailable > tokens);
         
         // decrement presale - token for manual contibution should be taken from presale
-        preSale20.tokensAvailable -= tokens;
+        preSale.tokens -= tokens;
 
         addContribution(who, contributionWei, tokens);
         Contribute(who, contributionWei, tokens);
@@ -268,11 +264,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // Cannot start if already started
         require(hasStarted == false);
         // Make sure the timestamps all make sense
-        require(preSale20.end > preSale20.start);
-        require(preSale10.end > preSale10.start);
+        require(preSale.end > preSale.start);
         require(sale.end > sale.start);
-        require(preSale10.start > preSale20.end);
-        require(sale.start > preSale10.end);
+        require(sale.start > preSale.end);
         require(distributionTime > sale.end);
 
         // Make sure the owner actually controls all the tokens for sales
@@ -280,7 +274,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         require((tokensRemainingForSale + tokensAwardedForSale) == TOTAL_TOKENS_TO_DISTRIBUTE);
 
         // Make sure we allocated all sale tokens
-        require((preSale20.tokensAvailable + sale.tokensAvailable) == tokensRemainingForSale);          
+        require((preSale.tokens + sale.tokens) == tokensRemainingForSale);          
 
         // The sale can begin
         hasStarted = true;
@@ -298,6 +292,17 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         owner = newOwner;
     }
 
+    function preSaleFinishedProcess( uint timeOfRequest) private returns(bool) {
+        // if we have Sales event and tokens of presale is not 0 move them to sales
+        require(timeOfRequest >= sale.start && timeOfRequest <= sale.end);
+        if (preSale.tokens != 0) {
+            uint savePreSaleTomens = preSale.tokens;
+            preSale.tokens = 0;
+            sale.tokens += savePreSaleTomens;
+        }
+        return true;
+    }
+    
     // Calculate how many tokens can be distributed for the given contribution
     function getTokensForContribution(uint weiContribution) private returns(uint timeOfRequest, uint tokenAmount, uint weiRemainder, uint bonus) { 
         // Get curent time
@@ -306,50 +311,24 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         bonus = 0;
                  
         // checking what period are we
-        if (timeOfRequest <= preSale20.end) {
+        if (timeOfRequest <= preSale.end) {
             // Return the amount of tokens that can be purchased
             // And the amount of wei that would be left over
-            tokenAmount = weiContribution / preSale20.priceInWei;
-            weiRemainder = weiContribution % preSale20.priceInWei;
-            bonus = ( tokenAmount * preSale20.bonus ) / 100;
-            
-            //withdraw token from corresponding sales part
-            preSale20.tokensAvailable =- tokenAmount;
-            sale.tokensAvailable =- bonus;
+            tokenAmount = weiContribution / preSale.priceInWei;
+            weiRemainder = weiContribution % preSale.priceInWei;
+            // if presale - checking bonuses
+            if (timeOfRequest < largeBonusStopTime) {
+                bonus = ( tokenAmount * largeBonus ) / 100;
+            } else {
+                bonus = ( tokenAmount * smallBonus ) / 100;
+            }             
         } else {
-            // move tokens form preSale20 to preSale10
-            if (preSale20.tokensAvailable > 0 ){
-                uint tokensMoveToPreSale10 = preSale20 .tokensAvailable;
-                preSale20.tokensAvailable = 0;
-                preSale10.tokensAvailable += tokensMoveToPreSale10;
-            }
-            if (timeOfRequest <= preSale10.end) {
-                // Return the amount of tokens that can be purchased
-                // And the amount of wei that would be left over
-                tokenAmount = weiContribution / preSale10.priceInWei;
-                weiRemainder = weiContribution % preSale10.priceInWei;
-                bonus = ( tokenAmount * preSale10.bonus ) / 100;
-                
-                //withdraw token from corresponding sales part
-                preSale10.tokensAvailable =- tokenAmount;
-                sale.tokensAvailable =- bonus;
-            }else{
-                // move tokens form preSale10 to preSale10
-                if (preSale10 .tokensAvailable > 0 ){
-                    uint tokensMoveToSale = preSale10.tokensAvailable;
-                    preSale10.tokensAvailable = 0;
-                    sale.tokensAvailable += tokensMoveToSale;
-                }
-            
-                // Return the amount of tokens that can be purchased
-                // And the amount of wei that would be left over
-                tokenAmount = weiContribution / sale.priceInWei;
-                weiRemainder = weiContribution % sale.priceInWei;
-                bonus = 0;
-                
-                //withdraw token from corresponding sales part
-                sale.tokensAvailable =- tokenAmount;
-            }
+            // if sales period just started - transfer all remaining tokens from presale to sale
+            preSaleFinishedProcess(timeOfRequest);
+            // Return the amount of tokens that can be purchased
+            // And the amount of wei that would be left over
+            tokenAmount = weiContribution / sale.priceInWei;
+            weiRemainder = weiContribution % sale.priceInWei;
         } 
         return(timeOfRequest, tokenAmount, weiRemainder, bonus);
     }
@@ -358,9 +337,9 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         // Cannot contribute if the sale hasn't started
         require(hasStarted == true);
         // Cannot contribute if sale is not in this time range
-        require((block.timestamp >= preSale20.start && block.timestamp <= preSale20.end)
-            || (block.timestamp >= preSale10.start && block.timestamp <= preSale10.end)
-        || (block.timestamp >= sale.start && block.timestamp <= sale.end) ); 
+        require((block.timestamp >= preSale.start && block.timestamp <= preSale.end)
+            || (block.timestamp >= sale.start && block.timestamp <= sale.end)
+        ); 
 
         // Cannot contribute if amount of money send is les then 0.1 ETH
         require(msg.value >= 100 finney);
@@ -380,7 +359,20 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         
         // Sanity check: make sure the remainder is less or equal to what was sent to us
         require(weiRemainder <= msg.value);
-        
+
+        // Check whether in presale or sale
+        if (timeOfRequest <= preSale.end) {
+            require(tokenAmount <= preSale.tokens);
+            require(bonus <= sale.tokens);
+            preSale.tokens -= tokenAmount;
+            sale.tokens -= bonus;
+        } else {
+            require(tokenAmount <= sale.tokens);
+            // there should be no bonus available after presale
+            require(bonus == 0); 
+            sale.tokens -= tokenAmount;
+        }
+
         // setup new contribution
         addContribution(msg.sender, msg.value - weiRemainder, tokenAmount + bonus);
 
@@ -408,7 +400,7 @@ contract TRLCoinSale is ApproveAndCallFallBack {
         uint tokenToSend = tokensRemainingForSale;
         // Set available tokens to Zero
         tokensRemainingForSale = 0;
-        sale.tokensAvailable = 0;
+        sale.tokens = 0;
         // Transfer them all to the owner
         bool result = tokenWallet.transfer(owner, tokenToSend);
         // Be sure that transfer was successfull
